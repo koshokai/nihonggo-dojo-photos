@@ -24,9 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: tools/photos
+      - uses: actions/checkout@v4   # 不用 sparse-checkout：它会连带挡住 photos-out 工作区里的照片，存不进去
       - name: 接着上次的进度
         run: |
           if git ls-remote --exit-code origin photos-out >/dev/null; then
@@ -36,19 +34,26 @@ jobs:
           fi
           mkdir -p out/photos
       - run: pip install -q pillow
-      - name: 下载
+      - name: 下载（每 20 分钟存一次到 photos-out 分支，随时能看到进度）
         env:
           PUBLIC_LOG: '1'
           PHOTO_JOBS: tools/photos/jobs.json
           PHOTO_OUT: out/photos
-          PHOTO_MINUTES: '300'
-        run: python3 tools/photos/fetch_photos.py
-      - name: 存到 photos-out 分支
-        if: always()
-        working-directory: out
+          PHOTO_MINUTES: '20'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet || { git commit -qm "photos: fetched from Wikimedia Commons" && git push -q origin HEAD:photos-out; }
-          ls photos | wc -l
+          git -C out config user.name "github-actions[bot]"
+          git -C out config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          save() {
+            git -C out add -A
+            git -C out diff --cached --quiet || { git -C out commit -qm "photos: $(ls out/photos | grep -c jpg) fetched" && git -C out push -q origin HEAD:photos-out; }
+            echo "== saved: $(ls out/photos | grep -c jpg) photos"
+          }
+          for i in $(seq 1 15); do
+            python3 tools/photos/fetch_photos.py | tee /tmp/run.log
+            save
+            grep -q '^0 articles to do' /tmp/run.log && break
+          done
+      - name: 最后再存一次
+        if: always()
+        run: |
+          cd out && git add -A && { git diff --cached --quiet || { git commit -qm "photos: fetched from Wikimedia Commons" && git push -q origin HEAD:photos-out; }; }
