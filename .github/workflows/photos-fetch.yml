@@ -1,0 +1,54 @@
+# 给阅读文章下载 Wikimedia Commons 的照片（CC0 / 公有领域 / CC BY / CC BY-SA）。
+# 开发用的云端机器被 Wikimedia 限流，所以在这个公开仓库的 Actions 里跑。这里只有搜索词和文章编号，没有文章正文。
+# tools/photos/jobs.json 是开发仓库导出的任务清单（python3 tools/fetch_photos.py --dump …），
+# tools/photos/fetch_photos.py 是开发仓库同名脚本的副本。
+# 下载到的照片和 photos/index.json（作者、授权）存到本仓库的 photos-out 分支，再拿回网站仓库抽查后发布。
+# 请求间隔、Retry-After 都按 Wikimedia 的要求来；可以反复运行，接着上次的进度。
+name: 下载阅读照片
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [tools/photos/**, .github/workflows/photos-fetch.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: photos-fetch
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/photos
+      - name: 接着上次的进度
+        run: |
+          if git ls-remote --exit-code origin photos-out >/dev/null; then
+            git fetch -q --depth 1 origin photos-out && git worktree add -q out FETCH_HEAD
+          else
+            git worktree add -q --orphan -b photos-out out
+          fi
+          mkdir -p out/photos
+      - run: pip install -q pillow
+      - name: 下载
+        env:
+          PUBLIC_LOG: '1'
+          PHOTO_JOBS: tools/photos/jobs.json
+          PHOTO_OUT: out/photos
+          PHOTO_MINUTES: '300'
+        run: python3 tools/photos/fetch_photos.py
+      - name: 存到 photos-out 分支
+        if: always()
+        working-directory: out
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || { git commit -qm "photos: fetched from Wikimedia Commons" && git push -q origin HEAD:photos-out; }
+          ls photos | wc -l
